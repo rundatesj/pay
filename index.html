@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>강사 급여명세서</title>
+  <link rel="stylesheet" href="style.css" />
+  <!-- CSV 파서(PapaParse) & HTML→PDF(html2pdf) CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/html2pdf.js@0.10.1/dist/html2pdf.bundle.min.js"></script>
+</head>
+<body>
+  <main class="container">
+    <h1>강사 급여명세서</h1>
+
+    <section class="controls">
+      <label for="teacherSelect">강사 선택</label>
+      <select id="teacherSelect"><option>불러오는 중...</option></select>
+
+      <button id="downloadPdfBtn" disabled>PDF로 저장</button>
+    </section>
+
+    <section id="payslip" class="card">
+      <h2 id="title">급여명세서</h2>
+      <div class="grid">
+        <div><strong>이름</strong><div id="f_name">-</div></div>
+        <div><strong>소속지점</strong><div id="f_branch">-</div></div>
+        <div><strong>급여월</strong><div id="f_month">-</div></div>
+        <div><strong>지급일</strong><div id="f_payday">-</div></div>
+      </div>
+
+      <hr/>
+
+      <div class="grid wide">
+        <div><strong>업무수당</strong><div id="f_duty">-</div></div>
+        <div><strong>개인레슨수당</strong><div id="f_personal">-</div></div>
+        <div><strong>그룹레슨수당</strong><div id="f_group">-</div></div>
+        <div><strong>기타수당</strong><div id="f_etc">-</div></div>
+        <div><strong>매출수당</strong><div id="f_sales">-</div></div>
+        <div><strong>직책수당</strong><div id="f_position">-</div></div>
+        <div><strong>합계</strong><div id="f_total">-</div></div>
+        <div><strong>소득세</strong><div id="f_tax">-</div></div>
+        <div><strong>지방세</strong><div id="f_localTax">-</div></div>
+      </div>
+
+      <div class="net">
+        <span>실지급액</span>
+        <strong id="f_net">-</strong>
+      </div>
+    </section>
+
+    <footer>© 모던필라테스</footer>
+  </main>
+
+  <script>
+    // ===== 1) 설정 =====
+    const CSV_URL =
+      "https://docs.google.com/spreadsheets/d/1UXjVrDeamV2e0xacvyMTVZw6_JS1P4JiSf969QFfaNk/export?format=csv&gid=0";
+
+    // CSV 열 순서 (A~N) —— 스크린샷 기준
+    // [이름, 소속지점, 급여월, 지급일, 업무수당, 개인레슨수당, 그룹레슨수당, 기타수당, 매출수당, 직책수당, 합계, 소득세, 지방세, 소계]
+    const COL = {
+      name: 0, branch: 1, month: 2, payday: 3,
+      duty: 4, personal: 5, group: 6, etc: 7,
+      sales: 8, position: 9, total: 10, tax: 11, localTax: 12, net: 13
+    };
+
+    const el = (id) => document.getElementById(id);
+    const fmt = (n) => {
+      // 숫자는 콤마 표기, 빈값/0은 0 처리
+      const x = (typeof n === "string") ? n.replace(/,/g,"") : n;
+      const num = Number(x || 0);
+      return num.toLocaleString("ko-KR");
+    };
+
+    let rows = []; // 데이터 캐시
+
+    // ===== 2) CSV 불러오기 =====
+    Papa.parse(CSV_URL, {
+      download: true,
+      header: false,
+      complete: (res) => {
+        // 첫 줄(A1~N1)은 헤더라면 제거(스크린샷은 1행 헤더, 2~8 데이터)
+        // 여기서는 2행부터 데이터라고 가정: 인덱스 1~로 슬라이스
+        rows = res.data.filter(r => r.length >= 14).slice(1);
+
+        // 드롭다운 채우기(이름 A열)
+        const sel = el("teacherSelect");
+        sel.innerHTML = '<option value="">강사 선택</option>' +
+          rows.map(r => `<option value="${r[COL.name]}">${r[COL.name]}</option>`).join("");
+
+        sel.disabled = false;
+        el("downloadPdfBtn").disabled = true;
+
+        sel.addEventListener("change", () => {
+          const name = sel.value;
+          if (!name) return;
+          const row = rows.find(r => r[COL.name] === name);
+          if (row) renderPayslip(row);
+          el("downloadPdfBtn").disabled = !row;
+        });
+
+        el("downloadPdfBtn").addEventListener("click", () => {
+          const name = el("f_name").textContent || "급여명세서";
+          const opt = {
+            margin: 10,
+            filename: `${name}_급여명세서.pdf`,
+            image: { type: 'jpeg', quality: 0.98 },
+            html2canvas: { scale: 2 },
+            jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+          };
+          html2pdf().from(el("payslip")).set(opt).save();
+        });
+      },
+      error: (err) => {
+        alert("시트를 불러오지 못했습니다. 공개 범위를 확인하세요.");
+        console.error(err);
+      }
+    });
+
+    // ===== 3) 렌더링 =====
+    function renderPayslip(r) {
+      el("title").textContent = `${r[COL.month]} 급여명세서`;
+
+      el("f_name").textContent = r[COL.name] || "-";
+      el("f_branch").textContent = r[COL.branch] || "-";
+      el("f_month").textContent = r[COL.month] || "-";
+      el("f_payday").textContent = r[COL.payday] || "-";
+
+      el("f_duty").textContent = fmt(r[COL.duty]);
+      el("f_personal").textContent = fmt(r[COL.personal]);
+      el("f_group").textContent = fmt(r[COL.group]);
+      el("f_etc").textContent = fmt(r[COL.etc]);
+      el("f_sales").textContent = fmt(r[COL.sales]);
+      el("f_position").textContent = fmt(r[COL.position]);
+      el("f_total").textContent = fmt(r[COL.total]);
+      el("f_tax").textContent = fmt(r[COL.tax]);
+      el("f_localTax").textContent = fmt(r[COL.localTax]);
+      el("f_net").textContent = fmt(r[COL.net]);
+    }
+  </script>
+</body>
+</html>
