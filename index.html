@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>강사 급여명세서</title>
-  <link rel="stylesheet" href="style.css" />
-  <!-- CSV 파서(PapaParse) & HTML→PDF(html2pdf) CDN -->
+  <link rel="stylesheet" href="./style.css?v=3" />
+  <!-- CSV 파서 & PDF 변환 라이브러리 -->
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/html2pdf.js@0.10.1/dist/html2pdf.bundle.min.js"></script>
 </head>
@@ -16,6 +16,9 @@
     <section class="controls">
       <label for="teacherSelect">강사 선택</label>
       <select id="teacherSelect"><option>불러오는 중...</option></select>
+
+      <label for="monthSelect">월 선택</label>
+      <select id="monthSelect" disabled><option>먼저 강사를 선택하세요</option></select>
 
       <button id="downloadPdfBtn" disabled>PDF로 저장</button>
     </section>
@@ -57,8 +60,6 @@
     const CSV_URL =
       "https://docs.google.com/spreadsheets/d/1UXjVrDeamV2e0xacvyMTVZw6_JS1P4JiSf969QFfaNk/export?format=csv&gid=0";
 
-    // CSV 열 순서 (A~N) —— 스크린샷 기준
-    // [이름, 소속지점, 급여월, 지급일, 업무수당, 개인레슨수당, 그룹레슨수당, 기타수당, 매출수당, 직책수당, 합계, 소득세, 지방세, 소계]
     const COL = {
       name: 0, branch: 1, month: 2, payday: 3,
       duty: 4, personal: 5, group: 6, etc: 7,
@@ -67,50 +68,40 @@
 
     const el = (id) => document.getElementById(id);
     const fmt = (n) => {
-      // 숫자는 콤마 표기, 빈값/0은 0 처리
       const x = (typeof n === "string") ? n.replace(/,/g,"") : n;
       const num = Number(x || 0);
       return num.toLocaleString("ko-KR");
     };
 
-    let rows = []; // 데이터 캐시
+    let latestByKey = new Map(); // { "이름|월" : row }
 
     // ===== 2) CSV 불러오기 =====
     Papa.parse(CSV_URL, {
       download: true,
       header: false,
       complete: (res) => {
-        // 첫 줄(A1~N1)은 헤더라면 제거(스크린샷은 1행 헤더, 2~8 데이터)
-        // 여기서는 2행부터 데이터라고 가정: 인덱스 1~로 슬라이스
-        rows = res.data.filter(r => r.length >= 14).slice(1);
+        const rows = res.data.filter(r => r.length >= 14).slice(1); // 헤더 제외
 
-        // 드롭다운 채우기(이름 A열)
-        const sel = el("teacherSelect");
-        sel.innerHTML = '<option value="">강사 선택</option>' +
-          rows.map(r => `<option value="${r[COL.name]}">${r[COL.name]}</option>`).join("");
+        // 이름+월 기준으로 최신행 저장
+        latestByKey = new Map();
+        for (const r of rows) {
+          const key = `${r[COL.name]}|${r[COL.month]}`.trim();
+          if (r[COL.name] && r[COL.month]) latestByKey.set(key, r);
+        }
 
-        sel.disabled = false;
+        // 강사 목록 채우기
+        const teacherNames = [...new Set(rows.map(r => r[COL.name]).filter(Boolean))];
+        teacherNames.sort();
+
+        const teacherSel = el("teacherSelect");
+        teacherSel.innerHTML = '<option value="">강사 선택</option>' +
+          teacherNames.map(n => `<option value="${n}">${n}</option>`).join("");
+
+        teacherSel.disabled = false;
+        el("monthSelect").disabled = true;
         el("downloadPdfBtn").disabled = true;
 
-        sel.addEventListener("change", () => {
-          const name = sel.value;
-          if (!name) return;
-          const row = rows.find(r => r[COL.name] === name);
-          if (row) renderPayslip(row);
-          el("downloadPdfBtn").disabled = !row;
-        });
-
-        el("downloadPdfBtn").addEventListener("click", () => {
-          const name = el("f_name").textContent || "급여명세서";
-          const opt = {
-            margin: 10,
-            filename: `${name}_급여명세서.pdf`,
-            image: { type: 'jpeg', quality: 0.98 },
-            html2canvas: { scale: 2 },
-            jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
-          };
-          html2pdf().from(el("payslip")).set(opt).save();
-        });
+        setupEvents();
       },
       error: (err) => {
         alert("시트를 불러오지 못했습니다. 공개 범위를 확인하세요.");
@@ -118,7 +109,60 @@
       }
     });
 
-    // ===== 3) 렌더링 =====
+    // ===== 3) 이벤트 설정 =====
+    function setupEvents() {
+      const teacherSel = el("teacherSelect");
+      const monthSel = el("monthSelect");
+      const downloadBtn = el("downloadPdfBtn");
+
+      // 강사 선택 시 → 해당 강사의 월 목록 채우기
+      teacherSel.addEventListener("change", () => {
+        const name = teacherSel.value;
+        if (!name) return;
+
+        const months = [];
+        for (const [key, r] of latestByKey.entries()) {
+          if (key.startsWith(`${name}|`)) months.push(r[COL.month]);
+        }
+        const uniqueMonths = [...new Set(months)];
+        uniqueMonths.sort(); // 필요시 reverse()로 최신 우선
+
+        monthSel.innerHTML = '<option value="">월 선택</option>' +
+          uniqueMonths.map(m => `<option value="${m}">${m}</option>`).join("");
+        monthSel.disabled = uniqueMonths.length === 0;
+        downloadBtn.disabled = true;
+      });
+
+      // 월 선택 시 → 해당 행 보여주기
+      monthSel.addEventListener("change", () => {
+        const name = teacherSel.value;
+        const month = monthSel.value;
+        const row = latestByKey.get(`${name}|${month}`);
+        if (row) {
+          renderPayslip(row);
+          downloadBtn.disabled = false;
+        } else {
+          alert("해당 월 데이터가 없습니다.");
+          downloadBtn.disabled = true;
+        }
+      });
+
+      // PDF 다운로드
+      downloadBtn.addEventListener("click", () => {
+        const name = el("f_name").textContent || "급여명세서";
+        const month = el("f_month").textContent || "";
+        const opt = {
+          margin: 10,
+          filename: `${name}_${month}_급여명세서.pdf`,
+          image: { type: 'jpeg', quality: 0.98 },
+          html2canvas: { scale: 2 },
+          jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+        };
+        html2pdf().from(el("payslip")).set(opt).save();
+      });
+    }
+
+    // ===== 4) 렌더링 =====
     function renderPayslip(r) {
       el("title").textContent = `${r[COL.month]} 급여명세서`;
 
